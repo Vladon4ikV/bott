@@ -1,12 +1,11 @@
 import asyncio
 import logging
-from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command, StateFilter
-from aiogram.fsm import State, StatesGroup
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup  # ← ПРАВИЛЬНО!
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-from sqlalchemy.orm import Session
 
 from config import BOT_TOKEN, WEB_APP_URL
 from database import get_db, User, Purchase, Achievement
