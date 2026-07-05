@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from sqlalchemy.orm import Session
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
