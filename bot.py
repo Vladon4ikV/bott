@@ -1,5 +1,4 @@
-import asyncio
-import logging
+import asyncio, logging
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -8,579 +7,216 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
-# ==================== КОНФИГ ====================
-BOT_TOKEN = "8224015269:AAHeZYvVzSZG_OexHc_lvtNMYq1k98Adhgw"
-WEB_APP_URL = "https://school-bot-webapp.onrender.com"
+from config import BOT_TOKEN, WEB_APP_URL
+from database import get_db, User, Purchase
+from yookassa_handler import yookassa
 
-# ==================== НАСТРОЙКА ====================
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-storage = MemoryStorage()
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(storage=storage)
+dp = Dispatcher(storage=MemoryStorage())
+logging.basicConfig(level=logging.INFO)
 
-# ==================== ДАННЫЕ В ПАМЯТИ ====================
-users_data = {}
+class Reg(StatesGroup):
+    school = State()
+    city = State()
 
-# ==================== СОСТОЯНИЯ ====================
-class RegisterStates(StatesGroup):
-    waiting_for_school = State()
-    waiting_for_city = State()
-
-# ==================== КЛАВИАТУРЫ ====================
-
-def get_main_keyboard(user_id: int):
-    """Главное меню (после регистрации)"""
+# ---------- КЛАВИАТУРЫ ----------
+def main_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text="🎮 Запустить игру",
-                web_app=WebAppInfo(url=WEB_APP_URL)
-            )
-        ],
-        [
-            InlineKeyboardButton(text="👆 Тапнуть", callback_data="tap"),
-            InlineKeyboardButton(text="📊 Статистика", callback_data="stats")
-        ],
-        [
-            InlineKeyboardButton(text="🏫 Сменить школу", callback_data="change_school"),
-            InlineKeyboardButton(text="🎁 Бонус", callback_data="bonus")
-        ],
-        [
-            InlineKeyboardButton(text="⚔️ Баттл", callback_data="battle"),
-            InlineKeyboardButton(text="🎡 Рулетка", callback_data="roulette")
-        ],
-        [
-            InlineKeyboardButton(text="💎 Магазин", callback_data="shop"),
-            InlineKeyboardButton(text="📈 Рейтинг", callback_data="rating")
-        ]
+        [InlineKeyboardButton("🎮 Играть", web_app=WebAppInfo(url=WEB_APP_URL))],
+        [InlineKeyboardButton("👆 Тап", callback_data="tap"),
+         InlineKeyboardButton("📊 Статистика", callback_data="stats")],
+        [InlineKeyboardButton("🎁 Бонус", callback_data="bonus"),
+         InlineKeyboardButton("⚔️ Баттл", callback_data="battle")],
+        [InlineKeyboardButton("🎡 Рулетка", callback_data="roulette"),
+         InlineKeyboardButton("💎 Магазин", callback_data="shop")],
+        [InlineKeyboardButton("📈 Рейтинг", callback_data="rating")]
     ])
 
-def get_school_keyboard():
-    """Выбор школы"""
+def school_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🏫 Школа №1", callback_data="school_1")],
-        [InlineKeyboardButton(text="🏫 Школа №2", callback_data="school_2")],
-        [InlineKeyboardButton(text="🏫 Школа №3", callback_data="school_3")],
-        [InlineKeyboardButton(text="🏫 Школа №4", callback_data="school_4")],
-        [InlineKeyboardButton(text="✏️ Ввести вручную", callback_data="school_manual")]
+        [InlineKeyboardButton(f"🏫 Школа {i}", callback_data=f"sch_{i}") for i in range(1,5)],
+        [InlineKeyboardButton("✏️ Вручную", callback_data="sch_manual")]
     ])
 
-def get_city_keyboard():
-    """Выбор города"""
+def city_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🌆 Москва", callback_data="city_Москва")],
-        [InlineKeyboardButton(text="🌆 Санкт-Петербург", callback_data="city_Санкт-Петербург")],
-        [InlineKeyboardButton(text="🌆 Новосибирск", callback_data="city_Новосибирск")],
-        [InlineKeyboardButton(text="🌆 Екатеринбург", callback_data="city_Екатеринбург")],
-        [InlineKeyboardButton(text="🌆 Казань", callback_data="city_Казань")],
-        [InlineKeyboardButton(text="✏️ Ввести вручную", callback_data="city_manual")]
+        [InlineKeyboardButton(c, callback_data=f"city_{c}") for c in ["Москва","СПб","Казань"]],
+        [InlineKeyboardButton("✏️ Вручную", callback_data="city_manual")]
     ])
 
-# ==================== ОБРАБОТЧИКИ ====================
-
+# ---------- /START ----------
 @dp.message(Command("start"))
-async def cmd_start(message: types.Message, state: FSMContext):
-    """Обработчик команды /start"""
-    user_id = message.from_user.id
-    
-    if user_id not in users_data:
-        await message.answer(
-            "🎓 Добро пожаловать в Школьный Баттл!\n\n"
-            "Для начала выбери свою школу:",
-            reply_markup=get_school_keyboard()
-        )
-        await state.set_state(RegisterStates.waiting_for_school)
+async def start(msg: types.Message, state: FSMContext):
+    db = next(get_db())
+    user = db.query(User).filter_by(telegram_id=msg.from_user.id).first()
+    if not user:
+        await msg.answer("Выбери школу:", reply_markup=school_kb())
+        await state.set_state(Reg.school)
         return
-    
-    user = users_data[user_id]
-    
-    await message.answer(
-        f"🎓 Привет, {message.from_user.first_name}!\n"
-        f"🏫 Школа: {user.get('school', 'Не выбрана')}\n"
-        f"🌆 Город: {user.get('city', 'Не выбран')}\n"
-        f"📚 Очки знаний: {user.get('kp', 0)}\n"
-        f"🧠 Мысли ученого: {user.get('st', 0)}\n"
-        f"🏆 Уровень: {user.get('level', 1)}\n\n"
-        f"Выбери действие:",
-        reply_markup=get_main_keyboard(user_id)
-    )
+    await msg.answer(f"Привет, {user.first_name}!\nKP: {user.kp}  ST: {user.st}", reply_markup=main_kb())
 
-@dp.callback_query(lambda c: c.data.startswith("school_"))
-async def process_school(callback: types.CallbackQuery, state: FSMContext):
-    """Обработка выбора школы"""
-    if callback.data == "school_manual":
-        await callback.message.answer("✏️ Введи название своей школы:")
-        await callback.answer()
+# ---------- РЕГИСТРАЦИЯ ----------
+@dp.callback_query(Reg.school)
+async def reg_school(call: types.CallbackQuery, state: FSMContext):
+    if call.data == "sch_manual":
+        await call.message.answer("Введи название школы")
         return
-    
-    school = callback.data.replace("school_", "")
-    await state.update_data(school=f"Школа №{school}")
-    
-    await callback.message.edit_text(
-        "🌆 Теперь выбери свой город:",
-        reply_markup=get_city_keyboard()
-    )
-    await callback.answer()
-    await state.set_state(RegisterStates.waiting_for_city)
+    await state.update_data(school=call.data.replace("sch_",""))
+    await call.message.edit_text("Выбери город:", reply_markup=city_kb())
+    await state.set_state(Reg.city)
 
-@dp.message(RegisterStates.waiting_for_school)
-async def process_school_manual(message: types.Message, state: FSMContext):
-    """Ручной ввод школы"""
-    school = message.text.strip()
-    await state.update_data(school=school)
-    
-    await message.answer(
-        "🌆 Теперь выбери свой город:",
-        reply_markup=get_city_keyboard()
-    )
-    await state.set_state(RegisterStates.waiting_for_city)
-
-@dp.callback_query(lambda c: c.data.startswith("city_"), RegisterStates.waiting_for_city)
-async def process_city(callback: types.CallbackQuery, state: FSMContext):
-    """Обработка выбора города"""
-    user_id = callback.from_user.id
-    
-    if callback.data == "city_manual":
-        await callback.message.answer("✏️ Введи название своего города:")
-        await callback.answer()
-        return
-    
-    city = callback.data.replace("city_", "")
+@dp.callback_query(Reg.city)
+async def reg_city(call: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    school = data.get("school", "Школа №1")
-    
-    # Регистрируем пользователя
-    users_data[user_id] = {
-        "school": school,
-        "city": city,
-        "kp": 0,
-        "st": 0,
-        "level": 1,
-        "taps": 0,
-        "login_streak": 1,
-        "last_login": datetime.now().isoformat(),
-        "battle_wins": 0,
-        "battle_losses": 0
-    }
-    
-    await callback.message.edit_text(
-        f"✅ Отлично! Ты зачислен в {school}, г. {city}!\n\n"
-        f"🎓 Теперь нажимай на школьника и зарабатывай очки знаний!\n"
-        f"Начинай свое приключение! 🚀",
-        reply_markup=get_main_keyboard(user_id)  # ← ВАЖНО! ПОКАЗЫВАЕМ ГЛАВНОЕ МЕНЮ
+    city = call.data.replace("city_","")
+    db = next(get_db())
+    user = User(
+        telegram_id=call.from_user.id,
+        username=call.from_user.username,
+        first_name=call.from_user.first_name,
+        school=data["school"],
+        city=city
     )
-    await callback.answer()
+    db.add(user)
+    db.commit()
+    await call.message.edit_text("✅ Готово!", reply_markup=main_kb())
     await state.clear()
 
-@dp.message(RegisterStates.waiting_for_city)
-async def process_city_manual(message: types.Message, state: FSMContext):
-    """Ручной ввод города"""
-    user_id = message.from_user.id
-    city = message.text.strip()
-    data = await state.get_data()
-    school = data.get("school", "Школа №1")
-    
-    users_data[user_id] = {
-        "school": school,
-        "city": city,
-        "kp": 0,
-        "st": 0,
-        "level": 1,
-        "taps": 0,
-        "login_streak": 1,
-        "last_login": datetime.now().isoformat(),
-        "battle_wins": 0,
-        "battle_losses": 0
-    }
-    
-    await message.answer(
-        f"✅ Отлично! Ты зачислен в {school}, г. {city}!\n\n"
-        f"🎓 Начинай свое приключение! 🚀",
-        reply_markup=get_main_keyboard(user_id)  # ← ВАЖНО!
-    )
-    await state.clear()
-
-# ==================== ОБРАБОТЧИКИ КНОПОК ====================
-
+# ---------- ОСНОВНОЙ ФУНКЦИОНАЛ ----------
 @dp.callback_query(lambda c: c.data == "tap")
-async def handle_tap(callback: types.CallbackQuery):
-    """Обработчик тапа"""
-    user_id = callback.from_user.id
-    
-    if user_id not in users_data:
-        await callback.answer("❌ Сначала зарегистрируйся через /start", show_alert=True)
-        return
-    
-    user = users_data[user_id]
-    user["kp"] += 1
-    user["taps"] += 1
-    
-    # Каждые 10 тапов даем мысль ученого
-    if user["taps"] % 10 == 0:
-        user["st"] += 1
-        await callback.answer(f"🧠 +1 Мысль ученого! (Всего: {user['st']})")
-    else:
-        await callback.answer(f"📚 +1 Очко знаний! (Всего: {user['kp']})")
-    
-    # Проверяем уровень (каждые 100 очков)
-    new_level = user["kp"] // 100 + 1
-    if new_level > user.get("level", 1):
-        user["level"] = new_level
-        await callback.answer(f"🎉 Уровень повышен! Ты теперь {new_level} уровень!", show_alert=True)
+async def tap(call: types.CallbackQuery):
+    db = next(get_db())
+    u = db.query(User).filter_by(telegram_id=call.from_user.id).first()
+    if not u: return await call.answer("Напиши /start")
+    u.kp += 1
+    u.taps += 1
+    if u.taps % 10 == 0: u.st += 1
+    if u.kp // 100 + 1 > u.level:
+        u.level = u.kp // 100 + 1
+    db.commit()
+    await call.answer(f"KP: {u.kp}  ST: {u.st}")
 
 @dp.callback_query(lambda c: c.data == "stats")
-async def show_stats(callback: types.CallbackQuery):
-    """Показывает статистику"""
-    user_id = callback.from_user.id
-    
-    if user_id not in users_data:
-        await callback.answer("❌ Сначала зарегистрируйся через /start", show_alert=True)
-        return
-    
-    user = users_data[user_id]
-    
-    await callback.answer(
-        f"📊 Твоя статистика:\n"
-        f"━━━━━━━━━━━━━━━━\n"
-        f"📚 Очки знаний: {user['kp']}\n"
-        f"🧠 Мысли ученого: {user['st']}\n"
-        f"🏆 Уровень: {user['level']}\n"
-        f"🖱️ Всего тапов: {user['taps']}\n"
-        f"🏫 Школа: {user['school']}\n"
-        f"🌆 Город: {user['city']}\n"
-        f"🔥 Серия входов: {user.get('login_streak', 0)} дней\n"
-        f"⚔️ Побед в баттлах: {user.get('battle_wins', 0)}\n"
-        f"💔 Поражений: {user.get('battle_losses', 0)}",
+async def stats(call: types.CallbackQuery):
+    db = next(get_db())
+    u = db.query(User).filter_by(telegram_id=call.from_user.id).first()
+    if not u: return
+    await call.answer(
+        f"KP: {u.kp}\nST: {u.st}\nLevel: {u.level}\nШкола: {u.school}\nГород: {u.city}",
         show_alert=True
     )
-
-@dp.callback_query(lambda c: c.data == "change_school")
-async def change_school(callback: types.CallbackQuery, state: FSMContext):
-    """Смена школы"""
-    user_id = callback.from_user.id
-    
-    if user_id not in users_data:
-        await callback.answer("❌ Сначала зарегистрируйся через /start", show_alert=True)
-        return
-    
-    await callback.message.edit_text(
-        "🏫 Выбери свою школу:",
-        reply_markup=get_school_keyboard()
-    )
-    await callback.answer()
-    await state.set_state(RegisterStates.waiting_for_school)
 
 @dp.callback_query(lambda c: c.data == "bonus")
-async def get_bonus(callback: types.CallbackQuery):
-    """Ежедневный бонус"""
-    user_id = callback.from_user.id
-    
-    if user_id not in users_data:
-        await callback.answer("❌ Сначала зарегистрируйся через /start", show_alert=True)
-        return
-    
-    user = users_data[user_id]
-    today = datetime.now().date().isoformat()
-    last_bonus = user.get("last_bonus", "")
-    
-    if last_bonus == today:
-        await callback.answer("❌ Ты уже получал бонус сегодня! Приходи завтра.", show_alert=True)
-        return
-    
-    bonus = 50 + user.get("login_streak", 0) * 5
-    user["kp"] += bonus
-    user["last_bonus"] = today
-    
-    await callback.answer(
-        f"🎉 +{bonus} Очков знаний!\n"
-        f"🔥 Серия входов: {user.get('login_streak', 0)} дней",
-        show_alert=True
-    )
+async def bonus(call: types.CallbackQuery):
+    db = next(get_db())
+    u = db.query(User).filter_by(telegram_id=call.from_user.id).first()
+    now = datetime.utcnow().date()
+    if u.last_login and u.last_login.date() == now:
+        return await call.answer("Сегодня уже получал")
+    u.last_login = datetime.utcnow()
+    u.login_streak = u.login_streak + 1 if u.last_login and (now - u.last_login.date()).days == 1 else 1
+    add = 50 + u.login_streak * 5
+    u.kp += add
+    db.commit()
+    await call.answer(f"🎁 +{add} KP")
 
 @dp.callback_query(lambda c: c.data == "roulette")
-async def roulette(callback: types.CallbackQuery):
-    """Рулетка"""
+async def roulette(call: types.CallbackQuery):
     import random
-    user_id = callback.from_user.id
-    
-    if user_id not in users_data:
-        await callback.answer("❌ Сначала зарегистрируйся через /start", show_alert=True)
-        return
-    
-    user = users_data[user_id]
-    
-    if user.get("kp", 0) < 1000:
-        await callback.answer("❌ Нужно 1000 очков знаний для рулетки!", show_alert=True)
-        return
-    
-    user["kp"] -= 1000
-    
-    rewards = [
-        (10, 30), (50, 25), (100, 20), (250, 15),
-        (500, 7), (1000, 2), (2500, 0.5), (5000, 0.1)
-    ]
-    
-    total_weight = sum(w for _, w in rewards)
-    roll = random.random() * total_weight
-    
-    cumulative = 0
-    reward = 10
-    
-    for value, weight in rewards:
-        cumulative += weight
-        if roll <= cumulative:
-            reward = value
-            break
-    
-    if random.random() < 0.000001:
-        reward = "telegram_premium"
-    
-    if reward == "telegram_premium":
-        user["kp"] += 10000
-        await callback.answer(
-            "🎉🎉🎉 ПОЗДРАВЛЯЮ!\n"
-            "Ты выиграл Telegram Premium на 1 месяц!\n"
-            "Сделай скриншот и напиши @admin!",
-            show_alert=True
-        )
-    else:
-        user["kp"] += reward
-        emoji = "🎉" if reward >= 500 else "✨" if reward >= 100 else "🎯"
-        await callback.answer(f"{emoji} Ты выиграл {reward} очков знаний!", show_alert=True)
+    db = next(get_db())
+    u = db.query(User).filter_by(telegram_id=call.from_user.id).first()
+    if u.kp < 1000: return await call.answer("Нужно 1000 KP")
+    u.kp -= 1000
+    win = random.choices([10,50,150,300,500,1000,2500,5000], weights=[30,25,20,15,7,2,0.5,0.1])[0]
+    u.kp += win
+    db.commit()
+    await call.answer(f"🎉 {win} KP", show_alert=True)
 
 @dp.callback_query(lambda c: c.data == "battle")
-async def start_battle(callback: types.CallbackQuery):
-    """Начать баттл"""
-    user_id = callback.from_user.id
-    
-    if user_id not in users_data:
-        await callback.answer("❌ Сначала зарегистрируйся через /start", show_alert=True)
-        return
-    
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="😊 Новичок (легко)", callback_data="battle_easy")],
-        [InlineKeyboardButton(text="😤 Хулиган (средне)", callback_data="battle_medium")],
-        [InlineKeyboardButton(text="🧠 Отличник (сложно)", callback_data="battle_hard")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
+async def battle_menu(call: types.CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton("😊 Лёгкий", callback_data="battle_easy"),
+         InlineKeyboardButton("😤 Средний", callback_data="battle_medium"),
+         InlineKeyboardButton("🧠 Сложный", callback_data="battle_hard")]
     ])
-    
-    await callback.message.edit_text(
-        "⚔️ Выбери уровень сложности:\n\n"
-        "😊 Новичок - 3 тапа/сек\n"
-        "😤 Хулиган - 5 тапов/сек\n"
-        "🧠 Отличник - 8 тапов/сек",
-        reply_markup=keyboard
-    )
-    await callback.answer()
+    await call.message.edit_text("Выбери сложность:", reply_markup=kb)
 
 @dp.callback_query(lambda c: c.data.startswith("battle_"))
-async def battle_fight(callback: types.CallbackQuery):
-    """Симуляция баттла"""
+async def battle_fight(call: types.CallbackQuery):
     import random
-    user_id = callback.from_user.id
-    level = callback.data.replace("battle_", "")
-    
-    if user_id not in users_data:
-        await callback.answer("❌ Ошибка", show_alert=True)
-        return
-    
-    user = users_data[user_id]
-    
-    bot_settings = {
-        "easy": {"name": "Новичок", "speed": 3, "reward": 90},
-        "medium": {"name": "Хулиган", "speed": 5, "reward": 310},
-        "hard": {"name": "Отличник", "speed": 8, "reward": 500}
-    }
-    
-    settings = bot_settings.get(level, bot_settings["easy"])
-    
-    user_score = random.randint(50, 100)
-    bot_score = settings["speed"] * random.randint(8, 12)
-    user_score += random.randint(-10, 20)
-    bot_score += random.randint(-5, 10)
-    
+    db = next(get_db())
+    u = db.query(User).filter_by(telegram_id=call.from_user.id).first()
+    lvl = call.data.replace("battle_","")
+    rewards = {"easy":90, "medium":310, "hard":500}
+    bot_score = {"easy":3, "medium":5, "hard":8}[lvl] * random.randint(8,13)
+    user_score = random.randint(50,120)
     if user_score > bot_score:
-        reward = settings["reward"]
-        user["kp"] += reward
-        user["battle_wins"] = user.get("battle_wins", 0) + 1
-        
-        await callback.message.edit_text(
-            f"⚔️ РЕЗУЛЬТАТ БАТТЛА\n"
-            f"━━━━━━━━━━━━━━━━\n"
-            f"Противник: {settings['name']}\n"
-            f"Ты: {user_score} очков\n"
-            f"Бот: {bot_score} очков\n\n"
-            f"🎉 ПОБЕДА!\n"
-            f"📚 +{reward} очков знаний!",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="⚔️ Еще баттл", callback_data="battle")],
-                [InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu")]
-            ])
-        )
+        u.kp += rewards[lvl]
+        u.battle_wins += 1
+        res = f"🎉 Победа! +{rewards[lvl]} KP"
     else:
-        user["battle_losses"] = user.get("battle_losses", 0) + 1
-        user["kp"] += 10
-        
-        await callback.message.edit_text(
-            f"⚔️ РЕЗУЛЬТАТ БАТТЛА\n"
-            f"━━━━━━━━━━━━━━━━\n"
-            f"Противник: {settings['name']}\n"
-            f"Ты: {user_score} очков\n"
-            f"Бот: {bot_score} очков\n\n"
-            f"💔 ПОРАЖЕНИЕ...\n"
-            f"📚 +10 утешительных очков",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="⚔️ Попробовать снова", callback_data="battle")],
-                [InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu")]
-            ])
-        )
-    
-    await callback.answer()
+        u.kp += 10
+        u.battle_losses += 1
+        res = "💔 Поражение. +10 KP"
+    db.commit()
+    await call.message.edit_text(f"{res}\nТы: {user_score} | Бот: {bot_score}", reply_markup=main_kb())
 
+# ---------- МАГАЗИН + ОПЛАТА ----------
 @dp.callback_query(lambda c: c.data == "shop")
-async def open_shop(callback: types.CallbackQuery):
-    """Магазин"""
-    user_id = callback.from_user.id
-    
-    if user_id not in users_data:
-        await callback.answer("❌ Сначала зарегистрируйся через /start", show_alert=True)
-        return
-    
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎒 Аватары", callback_data="shop_avatars")],
-        [InlineKeyboardButton(text="🖼️ Фоны", callback_data="shop_backgrounds")],
-        [InlineKeyboardButton(text="🎨 Цвет ника", callback_data="shop_colors")],
-        [InlineKeyboardButton(text="💎 Подписка", callback_data="shop_subscription")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
+async def shop(call: types.CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton("1 задача (15₽)", callback_data="buy_task_1")],
+        [InlineKeyboardButton("3 задачи (45₽)", callback_data="buy_task_3")],
+        [InlineKeyboardButton("10 задач (150₽)", callback_data="buy_task_10")],
+        [InlineKeyboardButton("1 день (75₽)", callback_data="buy_day")],
+        [InlineKeyboardButton("1 неделя (249₽)", callback_data="buy_week")],
+        [InlineKeyboardButton("1 месяц (349₽)", callback_data="buy_month")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
     ])
-    
-    await callback.message.edit_text(
-        "💎 ДОБРО ПОЖАЛОВАТЬ В МАГАЗИН!\n"
-        "━━━━━━━━━━━━━━━━\n"
-        "Здесь можно купить:\n"
-        "🎒 Аватары - измени внешность\n"
-        "🖼️ Фоны - укрась игру\n"
-        "🎨 Цвет ника - выделись\n"
-        "💎 Подписка - получи премиум",
-        reply_markup=keyboard
-    )
-    await callback.answer()
+    await call.message.edit_text("💎 Магазин", reply_markup=kb)
 
-@dp.callback_query(lambda c: c.data == "shop_avatars")
-async def shop_avatars(callback: types.CallbackQuery):
-    """Магазин аватаров"""
-    user_id = callback.from_user.id
-    
-    if user_id not in users_data:
-        await callback.answer("❌ Сначала зарегистрируйся через /start", show_alert=True)
-        return
-    
-    user = users_data[user_id]
-    
-    avatars = [
-        {"id": "default", "name": "🧑‍🎓 Стандартный", "price": 0, "owned": True},
-        {"id": "nerd", "name": "📚 Отличник", "price": 5000, "owned": user.get("kp", 0) >= 5000},
-        {"id": "bully", "name": "😈 Хулиган", "price": 50000, "owned": user.get("kp", 0) >= 50000},
-    ]
-    
-    buttons = []
-    for avatar in avatars:
-        status = "✅" if avatar["owned"] else f"💰 {avatar['price']}"
-        buttons.append([InlineKeyboardButton(
-            f"{avatar['name']} {status}",
-            callback_data=f"buy_avatar_{avatar['id']}"
-        )])
-    
-    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="shop")])
-    
-    await callback.message.edit_text(
-        "🎒 АВАТАРЫ\n"
-        "━━━━━━━━━━━━━━━━\n"
-        "Выбери своего школьника:",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+@dp.callback_query(lambda c: c.data.startswith("buy_"))
+async def buy(call: types.CallbackQuery):
+    item_id = call.data.replace("buy_","")
+    prices = {
+        "task_1":15, "task_3":45, "task_10":150,
+        "day":75, "week":249, "month":349
+    }
+    item_type = "tasks" if "task" in item_id else "subscription"
+    amount = prices[item_id]
+    db = next(get_db())
+    payment = yookassa.create_payment(
+        user_id=call.from_user.id,
+        amount=amount,
+        description=f"Покупка {item_id}",
+        metadata={"user_id": call.from_user.id, "item_type": item_type, "item_id": item_id}
     )
-    await callback.answer()
-
-@dp.callback_query(lambda c: c.data.startswith("buy_avatar_"))
-async def buy_avatar(callback: types.CallbackQuery):
-    """Покупка аватара"""
-    user_id = callback.from_user.id
-    avatar_id = callback.data.replace("buy_avatar_", "")
-    
-    if user_id not in users_data:
-        await callback.answer("❌ Ошибка", show_alert=True)
-        return
-    
-    user = users_data[user_id]
-    
-    prices = {"nerd": 5000, "bully": 50000}
-    price = prices.get(avatar_id, 0)
-    
-    if user.get("kp", 0) < price:
-        await callback.answer(f"❌ Не хватает очков! Нужно {price} KP", show_alert=True)
-        return
-    
-    user["kp"] -= price
-    user["avatar"] = avatar_id
-    
-    await callback.answer("✅ Аватар куплен и активирован!", show_alert=True)
-    await open_shop(callback)
+    p = Purchase(
+        user_id=call.from_user.id,
+        item_type=item_type,
+        item_id=item_id,
+        amount=amount,
+        payment_id=payment["id"]
+    )
+    db.add(p)
+    db.commit()
+    await call.message.answer(f"💳 Оплати по ссылке:\n{payment['confirmation']['confirmation_url']}")
 
 @dp.callback_query(lambda c: c.data == "rating")
-async def show_rating(callback: types.CallbackQuery):
-    """Рейтинг игроков"""
-    if not users_data:
-        await callback.answer("❌ Пока нет игроков", show_alert=True)
-        return
-    
-    sorted_users = sorted(
-        users_data.items(),
-        key=lambda x: x[1].get("kp", 0),
-        reverse=True
-    )[:10]
-    
-    rating_text = "📈 ТОП ИГРОКОВ\n━━━━━━━━━━━━━━━━\n"
-    for i, (uid, data) in enumerate(sorted_users, 1):
-        try:
-            user = await bot.get_chat(uid)
-            name = user.first_name or f"Игрок {uid}"
-        except:
-            name = f"Игрок {uid}"
-        
-        medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
-        rating_text += f"{medal} {name} - {data.get('kp', 0)} KP\n"
-    
-    await callback.answer(rating_text, show_alert=True)
+async def rating(call: types.CallbackQuery):
+    db = next(get_db())
+    top = db.query(User).order_by(User.kp.desc()).limit(10).all()
+    text = "🏆 ТОП\n" + "\n".join([f"{i+1}. {u.first_name} — {u.kp} KP" for i,u in enumerate(top)])
+    await call.answer(text, show_alert=True)
 
-@dp.callback_query(lambda c: c.data == "back_to_menu")
-async def back_to_menu(callback: types.CallbackQuery):
-    """Возврат в главное меню"""
-    user_id = callback.from_user.id
-    
-    if user_id not in users_data:
-        await callback.answer("❌ Ошибка", show_alert=True)
-        return
-    
-    user = users_data[user_id]
-    
-    await callback.message.edit_text(
-        f"🎓 Привет, {callback.from_user.first_name}!\n"
-        f"🏫 Школа: {user.get('school', 'Не выбрана')}\n"
-        f"📚 Очки знаний: {user.get('kp', 0)}\n"
-        f"🧠 Мысли ученого: {user.get('st', 0)}\n"
-        f"🏆 Уровень: {user.get('level', 1)}\n\n"
-        f"Выбери действие:",
-        reply_markup=get_main_keyboard(user_id)
-    )
-    await callback.answer()
+@dp.callback_query(lambda c: c.data == "main_menu")
+async def main_menu(call: types.CallbackQuery):
+    await call.message.edit_text("Главное меню", reply_markup=main_kb())
 
-# ==================== ЗАПУСК ====================
-
+# ---------- ЗАПУСК ----------
 async def main():
-    await bot.delete_webhook(drop_pending_updates=True)
-    print("🤖 Бот запущен!")
+    await bot.delete_webhook()
+    print("✅ Бот запущен")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

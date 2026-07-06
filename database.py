@@ -1,97 +1,43 @@
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, BigInteger
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime
 from config import DATABASE_URL
 
 Base = declarative_base()
-engine = create_engine(DATABASE_URL)
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {})
 SessionLocal = sessionmaker(bind=engine)
 
 class User(Base):
     __tablename__ = "users"
-    
     id = Column(Integer, primary_key=True)
-    telegram_id = Column(Integer, unique=True)
-    username = Column(String(255))
-    first_name = Column(String(255))
-    
-    # Ресурсы
-    knowledge_points = Column(Integer, default=0)  # KP
-    scholar_thoughts = Column(Integer, default=0)  # ST
-    
-    # Игровые параметры
-    school = Column(String(255))
-    city = Column(String(255))
+    telegram_id = Column(BigInteger, unique=True, index=True)
+    username = Column(String)
+    first_name = Column(String)
+    school = Column(String)
+    city = Column(String)
+    kp = Column(Integer, default=0)
+    st = Column(Integer, default=0)
     level = Column(Integer, default=1)
-    
-    # Улучшения
-    class_teacher_level = Column(Integer, default=0)
-    notebooks_level = Column(Integer, default=0)
-    chemistry_level = Column(Integer, default=0)
-    
-    # Прокачка
-    attack_speed = Column(Float, default=1.0)  # тапов в секунду
-    tap_power = Column(Integer, default=1)  # KP за тап
-    
-    # Статистика
-    total_taps = Column(Integer, default=0)
-    total_battles = Column(Integer, default=0)
-    wins = Column(Integer, default=0)
-    win_streak = Column(Integer, default=0)
-    max_streak = Column(Integer, default=0)
-    
-    # Достижения
-    last_login = Column(DateTime)
+    taps = Column(Integer, default=0)
     login_streak = Column(Integer, default=0)
-    last_streak_update = Column(DateTime)
-    
-    # Подписки
-    subscription_end = Column(DateTime)
+    last_login = Column(DateTime, default=datetime.utcnow)
+    battle_wins = Column(Integer, default=0)
+    battle_losses = Column(Integer, default=0)
+    avatar = Column(String, default="default")
     is_subscribed = Column(Boolean, default=False)
-    
-    # Настройки
-    selected_avatar = Column(String(255), default="default")
-    selected_background = Column(String(255), default="classroom")
-    nickname_color = Column(String(255), default="#FFFFFF")
-    
+    sub_end = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class Purchase(Base):
     __tablename__ = "purchases"
-    
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer)
-    item_type = Column(String(50))  # 'subscription', 'tasks', 'thoughts'
-    item_id = Column(String(50))
+    user_id = Column(BigInteger, index=True)
+    item_type = Column(String)
+    item_id = Column(String)
     amount = Column(Integer)
-    payment_id = Column(String(255))
-    status = Column(String(50), default="pending")
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-class Battle(Base):
-    __tablename__ = "battles"
-    
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer)
-    bot_level = Column(Integer)
-    user_score = Column(Integer)
-    bot_score = Column(Integer)
-    winner = Column(String(50))  # 'user', 'bot'
-    duration = Column(Integer)  # в секундах
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-class Achievement(Base):
-    __tablename__ = "achievements"
-    
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer)
-    achievement_type = Column(String(50))
-    level = Column(Integer, default=1)
-    progress = Column(Integer, default=0)
-    completed = Column(Boolean, default=False)
-    claimed = Column(Boolean, default=False)
+    payment_id = Column(String, unique=True)
+    status = Column(String, default="pending")
     created_at = Column(DateTime, default=datetime.utcnow)
 
 Base.metadata.create_all(engine)
